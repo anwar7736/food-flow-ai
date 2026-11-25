@@ -12,6 +12,17 @@ const orderModel = new mongoose.Schema({
     "total": Number,
     "shipping_charge": Number,
     "final_total": Number,
+    "payment_method": {
+        type: String,
+        enum: ["cash_on_delivery", "sslcommerz"],
+        default: "cash_on_delivery",
+    },
+    "payment_status": {
+        type: String,
+        enum: ["unpaid", "paid"],
+        default: "unpaid",
+    },
+    "payment_transaction_id": { type: String, default: null },
     "status_id": mongoose.Schema.Types.ObjectId,
 });
 

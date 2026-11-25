@@ -21,6 +21,10 @@ A Next.js food delivery app with customer, restaurant, and delivery-partner acco
 
 The app is served at `http://localhost:3000`. A reachable MongoDB connection is required for database-backed pages and APIs.
 
+## Manual checkout payments
+
+Manual customer checkout supports Cash on Delivery and SSLCommerz. Set `SSLCOMMERZ_STORE_ID`, `SSLCOMMERZ_STORE_PASSWORD`, and `SSLCOMMERZ_IS_LIVE` in `.env.local` (or `.env` for Docker Compose). Use `SSLCOMMERZ_IS_LIVE=false` for sandbox testing and `true` for live payments. The server validates successful payments directly with SSLCommerz before creating orders. Set `APP_URL` to the canonical HTTPS app URL when the app is behind a reverse proxy or load balancer.
+
 ## Run with Docker Compose
 
 1. Copy `.env.example` to `.env` and set `TOTP_ENCRYPTION_KEY` to a random value of at least 32 characters. Keep this key stable; it encrypts authenticator secrets.

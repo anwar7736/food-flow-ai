@@ -14,6 +14,10 @@ const PlaceOrder = () => {
     const { cart, setCart } = useContext(CartContext);
     const [subTotal, setSubTotal] = useState(0);
     const [isDisabled, setIsDisabled] = useState(false);
+    const [paymentMethod, setPaymentMethod] = useState("cash_on_delivery");
+    const [billingCity, setBillingCity] = useState("");
+    const [billingPostcode, setBillingPostcode] = useState("");
+    const [billingErrors, setBillingErrors] = useState({});
     const restaurantGroups = cart.reduce((groups, item) => {
         const key = item.restaurant_id || "restaurant";
         if (!groups[key]) {
@@ -31,6 +35,28 @@ const PlaceOrder = () => {
     useEffect(() => {
         setSubTotal(calculateSubTotal());
     }, [cart]);
+
+    useEffect(() => {
+        const url = new URL(window.location.href);
+        const paymentResult = url.searchParams.get("payment");
+        if (!paymentResult) return;
+
+        url.searchParams.delete("payment");
+        window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+        if (paymentResult === "success") {
+            session_destroy("cart");
+            setCart([]);
+            toast.success("Payment successful. Your order has been placed.");
+        } else if (paymentResult === "cancelled") {
+            toast.info("Payment was cancelled. Your cart is ready to try again.");
+        } else if (paymentResult === "failed") {
+            toast.error("Payment was not completed. Your cart is ready to try again.");
+        } else if (paymentResult === "verification_error") {
+            toast.error("We could not confirm the payment yet. Please contact support before retrying.");
+        } else if (paymentResult === "verification_failed") {
+            toast.error("Payment could not be verified. Your cart is ready to try again.");
+        }
+    }, [setCart]);
 
     const removeFromCart = (id) => {
         const cartItems = cart.filter(item => item._id !== id);
@@ -70,11 +96,25 @@ const PlaceOrder = () => {
     }
 
     const orderSubmit = async () => {
+        if (paymentMethod === "sslcommerz") {
+            const errors = {};
+            if (billingCity.trim().length < 2 || billingCity.trim().length > 100) {
+                errors.city = "Enter a city name between 2 and 100 characters.";
+            }
+            if (!/^\d{4,10}$/.test(billingPostcode.trim())) {
+                errors.postcode = "Enter a postcode with 4 to 10 digits.";
+            }
+            setBillingErrors(errors);
+            if (Object.keys(errors).length > 0) return;
+        }
         setIsDisabled(true);
         let data = {
             "user_id": user_auth()._id,
             "total": subTotal,
-            "items": []
+            "items": [],
+            "payment_method": paymentMethod,
+            "billing_city": billingCity,
+            "billing_postcode": billingPostcode,
         };
 
         cart.map(item => {
@@ -95,6 +135,10 @@ const PlaceOrder = () => {
             const result = await response.json();
             if (!response.ok || !result.success) {
                 toast.error(result.message || "Unable to place this order.");
+                return;
+            }
+            if (result.payment_required && result.redirect_url) {
+                window.location.assign(result.redirect_url);
                 return;
             }
             session_destroy('cart');
@@ -146,6 +190,70 @@ const PlaceOrder = () => {
                             <p><b>Phone:</b> {user_auth()?.phone || "Add a phone number in your profile."}</p>
                         </div>
                         <hr />
+                        <div className="ml-3 mt-3 mb-3">
+                            <h4>Payment Method</h4>
+                            <div className="mt-2 space-y-2">
+                                <label className="flex items-center gap-2">
+                                    <input
+                                        type="radio"
+                                        name="payment_method"
+                                        value="cash_on_delivery"
+                                        checked={paymentMethod === "cash_on_delivery"}
+                                        onChange={() => setPaymentMethod("cash_on_delivery")}
+                                    />
+                                    <span>Cash on Delivery</span>
+                                </label>
+                                <label className="flex items-center gap-2">
+                                    <input
+                                        type="radio"
+                                        name="payment_method"
+                                        value="sslcommerz"
+                                        checked={paymentMethod === "sslcommerz"}
+                                        onChange={() => setPaymentMethod("sslcommerz")}
+                                    />
+                                    <span>Pay online with SSLCommerz</span>
+                                </label>
+                            </div>
+                            {paymentMethod === "sslcommerz" && (
+                                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                                    <label className="flex flex-col gap-1">
+                                        <span>City</span>
+                                        <input
+                                            type="text"
+                                            value={billingCity}
+                                            onChange={(event) => {
+                                                setBillingCity(event.target.value);
+                                                setBillingErrors((errors) => ({ ...errors, city: "" }));
+                                            }}
+                                            maxLength={100}
+                                            aria-required="true"
+                                            aria-invalid={Boolean(billingErrors.city)}
+                                            aria-describedby={billingErrors.city ? "billing-city-error" : undefined}
+                                            className="rounded border px-3 py-2"
+                                        />
+                                        {billingErrors.city && <span id="billing-city-error" className="text-sm text-red-600">{billingErrors.city}</span>}
+                                    </label>
+                                    <label className="flex flex-col gap-1">
+                                        <span>Postcode</span>
+                                        <input
+                                            type="text"
+                                            inputMode="numeric"
+                                            value={billingPostcode}
+                                            onChange={(event) => {
+                                                setBillingPostcode(event.target.value);
+                                                setBillingErrors((errors) => ({ ...errors, postcode: "" }));
+                                            }}
+                                            maxLength={10}
+                                            aria-required="true"
+                                            aria-invalid={Boolean(billingErrors.postcode)}
+                                            aria-describedby={billingErrors.postcode ? "billing-postcode-error" : undefined}
+                                            className="rounded border px-3 py-2"
+                                        />
+                                        {billingErrors.postcode && <span id="billing-postcode-error" className="text-sm text-red-600">{billingErrors.postcode}</span>}
+                                    </label>
+                                </div>
+                            )}
+                        </div>
                         <div className="ml-3 mt-3 mb-3">
                             <h4>Costing Information</h4>
                             <div align="left" className="">

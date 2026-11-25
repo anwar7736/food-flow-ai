@@ -12,6 +12,13 @@ import { foodSchema } from "@/app/models/foodModel";
 import { verifyAuthSession } from "@/app/lib/session";
 import { randomUUID } from "node:crypto";
 import { ORDER_STATUS_SEEDS } from "@/app/lib/orderStatus";
+import { paymentTransactionSchema } from "@/app/models/paymentTransactionModel";
+import { createCheckoutOrders } from "@/app/lib/checkoutOrders";
+import {
+    createSslCommerzSession,
+    getSslCommerzConfig,
+    SslCommerzConfigurationError,
+} from "@/app/lib/sslcommerz";
 
 export async function POST(request) {
     const session = await verifyAuthSession(request.cookies.get("auth_session")?.value || "");
@@ -140,35 +147,96 @@ export async function POST(request) {
             (sum, order) => sum + order.total + order.shippingCharge,
             0
         );
+        const paymentMethod = isRestaurantOrder
+            ? "cash_on_delivery"
+            : payload.payment_method || "cash_on_delivery";
+        if (!["cash_on_delivery", "sslcommerz"].includes(paymentMethod)) {
+            return NextResponse.json({ success: false, message: "Select a valid payment method." }, { status: 400 });
+        }
+
+        const checkoutOrderDrafts = preparedOrders.map((prepared) => ({
+            restaurant_id: prepared.restaurant._id,
+            delivery_partner_id: prepared.deliveryPartnerId,
+            total: prepared.total,
+            shipping_charge: prepared.shippingCharge,
+            items: prepared.orderItems,
+        }));
+        if (!isRestaurantOrder && paymentMethod === "sslcommerz") {
+            let config;
+            try {
+                config = getSslCommerzConfig();
+            } catch (error) {
+                if (error instanceof SslCommerzConfigurationError) {
+                    return NextResponse.json({ success: false, message: error.message }, { status: 503 });
+                }
+                throw error;
+            }
+
+            const billingCity = String(payload.billing_city || "").trim();
+            const billingPostcode = String(payload.billing_postcode || "").trim();
+            const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(customer.email || "").trim());
+            if (!customer.name?.trim() || !validEmail || !customer.phone?.trim() ||
+                !customer.address?.trim() || billingCity.length < 2 ||
+                billingCity.length > 100 || !/^\d{4,10}$/.test(billingPostcode)) {
+                return NextResponse.json({
+                    success: false,
+                    message: "Add your name, valid email, phone, delivery address, city, and postcode before paying.",
+                }, { status: 400 });
+            }
+
+            const transactionId = randomUUID();
+            const payment = await new paymentTransactionSchema({
+                transaction_id: transactionId,
+                checkout_id: checkoutId,
+                user_id: customer._id,
+                amount: checkoutTotal,
+                currency: "BDT",
+                status_id: statusId,
+                billing_city: billingCity,
+                billing_postcode: billingPostcode,
+                order_draft: checkoutOrderDrafts,
+            }).save();
+
+            try {
+                const gatewayUrl = await createSslCommerzSession({
+                    config,
+                    payment,
+                    customer,
+                    billingCity,
+                    billingPostcode,
+                    requestOrigin: request.nextUrl.origin,
+                });
+                await paymentTransactionSchema.updateOne(
+                    { _id: payment._id, status: "pending" },
+                    { $set: { gateway_url: gatewayUrl } }
+                );
+                return NextResponse.json({
+                    success: true,
+                    payment_required: true,
+                    redirect_url: gatewayUrl,
+                    message: "Redirecting to SSLCommerz to complete your payment.",
+                });
+            } catch (error) {
+                await paymentTransactionSchema.updateOne(
+                    { _id: payment._id, status: "pending" },
+                    { $set: { status: "failed" } }
+                );
+                throw error;
+            }
+        }
+
         const mongoSession = await mongoose.startSession();
         try {
             await mongoSession.withTransaction(async () => {
-                for (const prepared of preparedOrders) {
-                    const order = await new orderSchema({
-                        user_id: customer._id,
-                        restaurant_id: prepared.restaurant._id,
-                        delivery_partner_id: prepared.deliveryPartnerId,
-                        date: new Date(),
-                        invoice_no: `INV-${Math.floor(100000 + Math.random() * 900000)}`,
-                        checkout_id: checkoutId,
-                        checkout_total: checkoutTotal,
-                        checkout_order_count: preparedOrders.length,
-                        total: prepared.total,
-                        shipping_charge: prepared.shippingCharge,
-                        final_total: prepared.total + prepared.shippingCharge,
-                        status_id: statusId,
-                    }).save({ session: mongoSession });
-
-                    await orderItemSchema.insertMany(
-                        prepared.orderItems.map((item) => ({ ...item, order_id: order._id })),
-                        { session: mongoSession }
-                    );
-                    await new orderStatusLogSchema({
-                        order_id: order._id,
-                        status_id: statusId,
-                        date: new Date(),
-                    }).save({ session: mongoSession });
-                }
+                await createCheckoutOrders({
+                    userId: customer._id,
+                    checkoutId,
+                    checkoutTotal,
+                    orderDrafts: checkoutOrderDrafts,
+                    statusId,
+                    paymentMethod,
+                    paymentStatus: "unpaid",
+                }, mongoSession);
             });
         } finally {
             await mongoSession.endSession();
@@ -275,6 +343,8 @@ export async function GET(request)
           total: 1,
             shipping_charge: 1,
             final_total: 1,
+            payment_method: 1,
+            payment_status: 1,
             restaurant: { name: 1, phone:1, address:1},
             user: { name: 1, phone: 1, address:1 },
             delivery: { name: 1, phone: 1, address:1 },

@@ -62,6 +62,9 @@ const InvoiceModal = ({ isOpen, onClose, data }) => {
                 <span className="font-semibold">Total Payable:</span> {data?.final_total}
               </li>
               <li className="text-gray-700">
+                <span className="font-semibold">Payment:</span> {data?.payment_method === "sslcommerz" ? "SSLCommerz" : "Cash on Delivery"} ({data?.payment_status === "paid" ? "Paid" : "Unpaid"})
+              </li>
+              <li className="text-gray-700">
                 <span className="font-semibold">Status:</span> <span style={{ color: data?.status?.color }}>{data?.status?.name}</span>
               </li>
             </ul>
