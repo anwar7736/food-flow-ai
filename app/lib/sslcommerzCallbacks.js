@@ -5,7 +5,7 @@ import {
 } from "@/app/lib/sslcommerzOrderPayment";
 
 function paymentReturnUrl(request, paymentResult) {
-    const url = new URL("/place_order", request.nextUrl.origin);
+    const url = new URL("/payment/result", request.nextUrl.origin);
     url.searchParams.set("payment", paymentResult);
     return url;
 }
