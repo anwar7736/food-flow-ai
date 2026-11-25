@@ -15,9 +15,14 @@ export async function PUT(request, { params }) {
     }
     await mongoDB_connect();
     const payload = await request.json();
+    const user = await restaurantSchema.findById(id);
+    if (!user) {
+        return NextResponse.json({ success: false, data, message: "User not found." }, { status: 404 });
+    }
+
     const fields = {
         name: payload.name,
-        phone: payload.phone,
+        phone: typeof payload.phone === "string" ? payload.phone.trim() : undefined,
         email: typeof payload.email === "string" ? payload.email.trim().toLowerCase() : undefined,
         city: payload.city,
         address: payload.address,
@@ -25,65 +30,52 @@ export async function PUT(request, { params }) {
     const update = Object.fromEntries(
         Object.entries(fields).filter(([, value]) => typeof value === "string")
     );
-    let phoneExistence = await restaurantSchema.findOne({ phone: fields.phone, _id: { $ne: id } });
-    let emailExistence = await restaurantSchema.findOne({ email: fields.email, _id: { $ne: id } });
-    if (phoneExistence) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields.email || "")) {
+        return NextResponse.json({ success: false, data, message: "Provide a valid email address.", fieldErrors: { email: "Provide a valid email address." } }, { status: 400 });
+    }
+
+    const phoneChanged = typeof fields.phone === "string" &&
+        fields.phone !== String(user.phone || "").trim();
+    if (phoneChanged && await restaurantSchema.findOne({ phone: fields.phone, _id: { $ne: user._id } })) {
+        message = "Phone number already used.";
+        return NextResponse.json({ success: false, data, message, fieldErrors: { phone: message } }, { status: 409 });
+    }
+    const emailChanged = fields.email !== String(user.email || "").trim().toLowerCase();
+    if (emailChanged && await restaurantSchema.findOne({ email: fields.email, _id: { $ne: user._id } })) {
+        message = "Email address already used.";
+        return NextResponse.json({ success: false, data, message, fieldErrors: { email: message } }, { status: 409 });
+    }
+
+    if (payload.old_password) {
+        if (typeof payload.password !== "string" || payload.password.length < 4) {
+            return NextResponse.json({ success: false, data, message: "Provide a new password with at least 4 characters." });
+        }
+        const passwordMatched = await bcrypt.compare(payload.old_password, user.password);
+        if (!passwordMatched) {
+            return NextResponse.json({ success: false, data, message: "Old password is incorrect." });
+        }
+
+        update.password = await bcrypt.hash(payload.password, 10);
+    }
+    else if (payload.password) {
+        return NextResponse.json({ success: false, data, message: "Enter your current password before changing it." });
+    }
+
+    data = await restaurantSchema.updateOne({ _id: id }, { $set: update });
+    if (data.matchedCount > 0) {
+        success = true;
+        message = "Profile updated successfully.";
+        data = await restaurantSchema.findById(id, {
+            password: 0,
+            twoFactorSecret: 0,
+            twoFactorPendingSecret: 0,
+            twoFactorLastUsedStep: 0,
+        });
+
+    } else {
         success = false;
-        message = 'Phone number already used.';
-        return NextResponse.json({ success, data, message });
+        message = "Nothing to updated.";
     }
-    else if (emailExistence) {
-        success = false;
-        message = 'Email address already used.';
-        return NextResponse.json({ success, data, message, fieldErrors: { email: message } }, { status: 409 });
-    }
-
-    else {
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields.email || "")) {
-            return NextResponse.json({ success: false, data, message: "Provide a valid email address.", fieldErrors: { email: "Provide a valid email address." } }, { status: 400 });
-        }
-        let user = await restaurantSchema.findById(id);
-        if (!user) {
-            success = false;
-            message = "User not fond.";
-            return NextResponse.json({ success, data, message });
-        }
-        if (payload.old_password) {
-            if (typeof payload.password !== "string" || payload.password.length < 4) {
-                return NextResponse.json({ success: false, data, message: "Provide a new password with at least 4 characters." });
-            }
-            const passwordMatched = await bcrypt.compare(payload.old_password, user.password);
-            if (!passwordMatched) {
-                success = false;
-                message = "Old password is incorrect.";
-                return NextResponse.json({ success, data, message });
-
-            }
-
-            update.password = await bcrypt.hash(payload.password, 10);
-        }
-        else if (payload.password) {
-            return NextResponse.json({ success: false, data, message: "Enter your current password before changing it." });
-        }
-
-        data = await restaurantSchema.updateOne({ _id: id }, { $set: update });
-        if (data.matchedCount > 0) {
-            success = true;
-            message = "Profile updated successfully.";
-            data = await restaurantSchema.findById(id, {
-                password: 0,
-                twoFactorSecret: 0,
-                twoFactorPendingSecret: 0,
-                twoFactorLastUsedStep: 0,
-            });
-
-        } else {
-            success = false;
-            message = "Nothing to updated.";
-
-        }
-    }
-
 
     return NextResponse.json({ success, data, message });
 }

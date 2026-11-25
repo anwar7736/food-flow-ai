@@ -15,9 +15,14 @@ export async function PUT(request, { params }) {
     }
     await mongoDB_connect();
     const payload = await request.json();
+    const user = await userSchema.findById(id);
+    if (!user) {
+        return NextResponse.json({ success: false, data, message: "User not found." }, { status: 404 });
+    }
+
     const fields = {
         name: payload.name,
-        phone: payload.phone,
+        phone: typeof payload.phone === "string" ? payload.phone.trim() : undefined,
         email: typeof payload.email === "string" ? payload.email.trim().toLowerCase() : undefined,
         address: payload.address,
     };
@@ -28,59 +33,49 @@ export async function PUT(request, { params }) {
     if (!validEmail) {
         return NextResponse.json({ success: false, data, message: "Provide a valid email address.", fieldErrors: { email: "Provide a valid email address." } }, { status: 400 });
     }
-    let user = await userSchema.findOne({ phone: fields.phone, _id: { $ne: id } });
-    if (user) {
+    const phoneChanged = typeof fields.phone === "string" &&
+        fields.phone !== String(user.phone || "").trim();
+    if (phoneChanged && await userSchema.findOne({ phone: fields.phone, _id: { $ne: user._id } })) {
+        message = "Phone number already used.";
+        return NextResponse.json({ success: false, data, message, fieldErrors: { phone: message } }, { status: 409 });
+    }
+    const emailChanged = typeof fields.email === "string" &&
+        fields.email !== String(user.email || "").trim().toLowerCase();
+    if (emailChanged && await userSchema.findOne({ email: fields.email, _id: { $ne: user._id } })) {
+        message = "Email address already used.";
+        return NextResponse.json({ success: false, data, message, fieldErrors: { email: message } }, { status: 409 });
+    }
+
+    if (payload.old_password) {
+        if (typeof payload.password !== "string" || payload.password.length < 4) {
+            return NextResponse.json({ success: false, data, message: "Provide a new password with at least 4 characters." });
+        }
+        const passwordMatched = await bcrypt.compare(payload.old_password, user.password);
+        if (!passwordMatched) {
+            return NextResponse.json({ success: false, data, message: "Old password is incorrect." });
+        }
+
+        update.password = await bcrypt.hash(payload.password, 10);
+    }
+    else if (payload.password) {
+        return NextResponse.json({ success: false, data, message: "Enter your current password before changing it." });
+    }
+
+    data = await userSchema.updateOne({ _id: id }, { $set: update });
+    if (data.matchedCount > 0) {
+        success = true;
+        message = "Profile updated successfully.";
+        data = await userSchema.findById(id, {
+            password: 0,
+            twoFactorSecret: 0,
+            twoFactorPendingSecret: 0,
+            twoFactorLastUsedStep: 0,
+        });
+
+    } else {
         success = false;
-        message = 'Phone number already used.';
-        return NextResponse.json({ success, data, message, fieldErrors: { phone: message } }, { status: 409 });
+        message = "Nothing to updated.";
     }
-    else {
-        const existingEmail = await userSchema.findOne({ email: fields.email, _id: { $ne: id } });
-        if (existingEmail) {
-            return NextResponse.json({ success: false, data, message: "Email address already used.", fieldErrors: { email: "Email address already used." } }, { status: 409 });
-        }
-        user = await userSchema.findById(id);
-        if (!user) {
-            success = false;
-            message = "User not fond.";
-            return NextResponse.json({ success, data, message });
-        }
-        if (payload.old_password) {
-            if (typeof payload.password !== "string" || payload.password.length < 4) {
-                return NextResponse.json({ success: false, data, message: "Provide a new password with at least 4 characters." });
-            }
-            const passwordMatched = await bcrypt.compare(payload.old_password, user.password);
-            if (!passwordMatched) {
-                success = false;
-                message = "Old password is incorrect.";
-                return NextResponse.json({ success, data, message });
-
-            }
-
-            update.password = await bcrypt.hash(payload.password, 10);
-        }
-        else if (payload.password) {
-            return NextResponse.json({ success: false, data, message: "Enter your current password before changing it." });
-        }
-
-        data = await userSchema.updateOne({ _id: id }, { $set: update });
-        if (data.matchedCount > 0) {
-            success = true;
-            message = "Profile updated successfully.";
-            data = await userSchema.findById(id, {
-                password: 0,
-                twoFactorSecret: 0,
-                twoFactorPendingSecret: 0,
-                twoFactorLastUsedStep: 0,
-            });
-
-        } else {
-            success = false;
-            message = "Nothing to updated.";
-
-        }
-    }
-
 
     return NextResponse.json({ success, data, message });
 }
